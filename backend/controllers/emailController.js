@@ -4,11 +4,11 @@ const Sender = require('../models/senderModel')
 const { ImapFlow } = require('imapflow')
 const moment = require('moment')
 const pino = require('pino')()
-require('dotenv').config()
+const { checkCellForCity } = require('./helpers')  // Moved the checkCellForCity function to a helper file
 
+require('dotenv').config()
 pino.level = 'silent'
 
-// Fetch emails and list out titles and xlsx file names, and download attachments
 exports.fetchAndDownloadOrders = async (req, res) => {
     const { senderId, day } = req.body
 
@@ -39,49 +39,72 @@ exports.fetchAndDownloadOrders = async (req, res) => {
         })
 
         await client.connect()
-
-        // Make sure you're searching in the right folder
         await client.mailboxOpen('INBOX')
 
-        // Search for emails from the sender and on the target date
         const messages = await client.search({
             from: sender.email,
             on: targetDate.toDate(),
         })
 
-        const filePaths = []
+        const fetchedFiles = []
         const emailList = []
+
+        const mainFolderName = `${sender.companyName}_${day}`
+        const mainFolderPath = path.join(__dirname, '../downloads', mainFolderName)
+        if (!fs.existsSync(mainFolderPath)) {
+            fs.mkdirSync(mainFolderPath, { recursive: true })
+        }
+
+        const cities = sender.cities
+
         for (let uid of messages) {
-            // Fetch the message's envelope and body structure
             const message = await client.fetchOne(uid, { envelope: true, bodyStructure: true })
 
-            const emailTitle = message.envelope.subject
-            const emailDate = message.envelope.date
-            const emailFrom = message.envelope.from[0].address
-            const emailTo = message.envelope.to.map((recipient) => recipient.address).join(', ')
-
-            // Recursive function to extract attachment filenames and download them
             const downloadAttachments = async (parts, uid) => {
                 if (!parts) return []
 
                 const downloadedFiles = []
                 for (const part of parts) {
-                    // Check for attachment disposition and ensure it's a .xlsx file
-                    if (part.disposition === 'attachment' && part.dispositionParameters?.filename.endsWith('.xlsx')) {
+                    const isExcel = part.dispositionParameters?.filename.endsWith('.xlsx') || part.dispositionParameters?.filename.endsWith('.xls')
+                    if (part.disposition === 'attachment' && isExcel) {
                         const attachmentFilename = part.dispositionParameters.filename
 
-                        // Download the attachment content
-                        const { content, meta } = await client.download(uid, part.part)
+                        const { content } = await client.download(uid, part.part)
 
-                        // Define where to save the attachment
-                        const savePath = path.join(__dirname, '../downloads', attachmentFilename)
+                        const chunks = []
+                        for await (let chunk of content) {
+                            chunks.push(chunk)
+                        }
+                        const buffer = Buffer.concat(chunks)
+                        const fileType = attachmentFilename.endsWith('.xls') ? 'xls' : 'xlsx'
 
-                        // Pipe the content to a file
-                        content.pipe(fs.createWriteStream(savePath))
-                        console.log(`Downloaded attachment: ${attachmentFilename}`)
+                        const checkResult = checkCellForCity(buffer, fileType, 'F4', cities)
+                        let cityFolderPath
+
+                        if (checkResult.success) {
+                            cityFolderPath = path.join(mainFolderPath, checkResult.city)
+                            fetchedFiles.push({
+                                filename: attachmentFilename,
+                                city: checkResult.city
+                            })
+                        } else {
+                            cityFolderPath = path.join(mainFolderPath, 'city_undefined')
+                            fetchedFiles.push({
+                                filename: attachmentFilename,
+                                city: false
+                            })
+                        }
+
+                        if (!fs.existsSync(cityFolderPath)) {
+                            fs.mkdirSync(cityFolderPath, { recursive: true })
+                        }
+
+                        const savePath = path.join(cityFolderPath, attachmentFilename)
+                        fs.writeFileSync(savePath, buffer)
+
+                        console.log(`Downloaded attachment: ${attachmentFilename} to folder: ${checkResult.success ? checkResult.city : 'city_undefined'}`)
 
                         downloadedFiles.push(attachmentFilename)
-                        filePaths.push(attachmentFilename)
                     }
                 }
                 return downloadedFiles
@@ -89,22 +112,20 @@ exports.fetchAndDownloadOrders = async (req, res) => {
 
             const attachmentList = await downloadAttachments(message.bodyStructure.childNodes, uid)
 
-            // Add the base information (from, to, subject, date) and attachments to the array
             emailList.push({
-                emailTitle,
-                emailDate,
-                emailFrom,
-                emailTo,
+                emailTitle: message.envelope.subject,
+                emailDate: message.envelope.date,
+                emailFrom: message.envelope.from[0].address,
+                emailTo: message.envelope.to.map((recipient) => recipient.address).join(', '),
                 attachments: attachmentList,
             })
         }
-
         await client.logout()
 
         res.json({
             success: true,
-            filePaths,
-            data: emailList,
+            fetchedFiles,
+            mainFolderName,
             message: `Fetched and downloaded attachments for sender ${sender.email} on ${day}.`,
         })
     } catch (err) {
@@ -113,10 +134,21 @@ exports.fetchAndDownloadOrders = async (req, res) => {
     }
 }
 
-// Ensure that the `downloads` directory exists
 const ensureDownloadDirExists = () => {
     const downloadDir = path.join(__dirname, '..', 'downloads')
+
     if (!fs.existsSync(downloadDir)) {
         fs.mkdirSync(downloadDir)
+    } else {
+        const files = fs.readdirSync(downloadDir)
+        for (const file of files) {
+            const filePath = path.join(downloadDir, file)
+
+            if (fs.statSync(filePath).isDirectory()) {
+                fs.rmSync(filePath, { recursive: true, force: true })
+            } else {
+                fs.unlinkSync(filePath)
+            }
+        }
     }
 }

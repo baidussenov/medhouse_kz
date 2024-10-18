@@ -39,17 +39,50 @@ router.get('/oauth2callback', (req, res) => {
 
 // Route 3: Upload Files to Google Drive
 router.post('/upload', async (req, res) => {
-    const { fileList, folderId } = req.body // Array of file paths and optional folder ID
+    const { mainFolderName, folderId } = req.body // Array of file paths and optional folder ID
 
-    if (!fileList || fileList.length === 0) {
-        return res.status(400).send('No files provided.')
-    }
+    if (!mainFolderName)
+        return res.json({ success: false, message: 'mainFolderName not specified' })
 
     try {
-        await uploadToDrive(fileList, folderId) // Call the controller function
-        res.send('Files uploaded successfully!')
+        await uploadToDrive(mainFolderName, folderId) // Call the controller function
+        res.json({ success: true, message: 'Files uploaded successfully!' })
     } catch (err) {
-        res.status(500).send('Error uploading files: ' + err.message)
+        res.status(500).json({ success: false, message: 'Error uploading files: ' + err.message })
+    }
+})
+
+// Route 4: Check if the user is authenticated
+router.get('/auth/check', (req, res) => {
+    try {
+        // Check if the token file exists and is valid
+        if (fs.existsSync(TOKEN_PATH)) {
+            const token = JSON.parse(fs.readFileSync(TOKEN_PATH))
+            oAuth2Client.setCredentials(token)
+
+            // Check if the token is still valid
+            oAuth2Client.getAccessToken((err, accessToken) => {
+                if (err) {
+                    res.json({
+                        authenticated: false, authUrl: oAuth2Client.generateAuthUrl({
+                            access_type: 'offline',
+                            scope: ['https://www.googleapis.com/auth/drive.file'],
+                        })
+                    })
+                } else {
+                    res.json({ authenticated: true })
+                }
+            })
+        } else {
+            // If no token, return the auth URL for login
+            const authUrl = oAuth2Client.generateAuthUrl({
+                access_type: 'offline',
+                scope: ['https://www.googleapis.com/auth/drive.file'],
+            })
+            res.json({ authenticated: false, authUrl })
+        }
+    } catch (err) {
+        res.status(500).json({ authenticated: false, error: err.message })
     }
 })
 

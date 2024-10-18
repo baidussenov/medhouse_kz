@@ -1,15 +1,28 @@
-import React, { useState } from 'react'
+import React from 'react'
+import { BrowserRouter as Router, Route, Routes } from 'react-router-dom'
+import FetchFiles from './pages/FetchFiles'
+import UploadFiles from './pages/UploadFiles'
+import FetchAndUpload from './pages/FetchAndUpload'
 import './App.css'
-import EmailDownload from './components/EmailDownload'
 
 function App() {
   return (
-    <div className="App">
-      <header className="App-header">
-        <h1>Email Downloader</h1>
-      </header>
-      <EmailDownload />
-    </div>
+    <Router>
+      <div className="App">
+        <nav>
+          <ul>
+            <li><a href="/">Fetch Files</a></li>
+            <li><a href="/upload">Upload Files</a></li>
+            <li><a href="/fetchupload">Fetch and Upload</a></li>
+          </ul>
+        </nav>
+        <Routes>
+          <Route path="/" element={<FetchFiles />} />
+          <Route path="/upload" element={<UploadFiles />} />
+          <Route path="/fetchupload" element={<FetchAndUpload />} />
+        </Routes>
+      </div>
+    </Router>
   )
 }
 
