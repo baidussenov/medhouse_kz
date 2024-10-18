@@ -1,4 +1,4 @@
-const bcrypt = require('bcrypt')
+const argon2 = require('argon2')
 const dotenv = require('dotenv')
 
 // Load .env variables
@@ -15,7 +15,8 @@ const authenticateAdmin = async (req, res, next) => {
         // Compare the hash of the provided password with the stored hash in .env
         const adminTokenHash = process.env.ADMIN_ACCESS_TOKEN
 
-        const isValid = await bcrypt.compare(password, adminTokenHash)
+        // Use argon2 to verify the password
+        const isValid = await argon2.verify(adminTokenHash, password)
 
         if (!isValid) {
             return res.status(403).json({ message: 'Invalid admin password' })
